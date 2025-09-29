@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { User, UserRole } from './types';
 import LoginPage from './pages/LoginPage';
 import AdminDashboard from './pages/AdminDashboard';
@@ -7,12 +7,29 @@ import CustomerDashboard from './pages/CustomerDashboard';
 import Layout from './components/Layout';
 import { ToastProvider } from './contexts/ToastContext';
 import RegisterPage from './pages/RegisterPage';
+import { logoutUser, supabase } from './services/supabase';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 
-type View = 'login' | 'register' | 'dashboard';
+type View = 'login' | 'register' | 'dashboard' | 'resetPassword';
 
 const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [view, setView] = useState<View>('login');
+
+  useEffect(() => {
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'PASSWORD_RECOVERY') {
+        // User has clicked the password reset link.
+        // The Supabase client automatically sets the session from the URL hash.
+        setView('resetPassword');
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
+
 
   const handleLogin = useCallback((user: User) => {
     setCurrentUser(user);
@@ -20,6 +37,7 @@ const App: React.FC = () => {
   }, []);
 
   const handleLogout = useCallback(() => {
+    logoutUser();
     setCurrentUser(null);
     setView('login');
   }, []);
@@ -47,6 +65,8 @@ const App: React.FC = () => {
         }
     } else if (view === 'register') {
         return <RegisterPage onRegister={handleLogin} onBackToLogin={handleBackToLogin} />;
+    } else if (view === 'resetPassword') {
+        return <ResetPasswordPage onPasswordReset={handleBackToLogin} />;
     } else {
         return <LoginPage onLogin={handleLogin} onNavigateToRegister={handleNavigateToRegister} />;
     }

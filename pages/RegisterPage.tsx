@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { createCustomer } from '../services/supabase';
+import { registerAndLoginCustomer } from '../services/supabase';
 import { useToast } from '../contexts/ToastContext';
 import { ToastType } from '../components/Toast';
-import { User, UserRole } from '../types';
+import { User } from '../types';
 
 interface RegisterPageProps {
   onRegister: (user: User) => void;
@@ -32,20 +32,22 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackToLogin }
       addToast('Kata sandi tidak cocok.', ToastType.ERROR);
       return;
     }
+    if (formData.password.length < 6) {
+      addToast('Kata sandi minimal harus 6 karakter.', ToastType.ERROR);
+      return;
+    }
     setLoading(true);
     try {
       const { confirmPassword, ...customerData } = formData;
-      const newCustomer = await createCustomer(customerData);
+      const newUser = await registerAndLoginCustomer(customerData as any);
       addToast('Pendaftaran berhasil! Selamat datang.', ToastType.SUCCESS);
-      onRegister({
-        id: newCustomer.id,
-        name: newCustomer.name,
-        email: newCustomer.email,
-        role: UserRole.CUSTOMER,
-      });
-    } catch (error) {
+      onRegister(newUser);
+    } catch (error: any) {
       console.error(error);
-      addToast('Pendaftaran gagal. Mohon coba lagi.', ToastType.ERROR);
+      const errorMessage = error.message.includes('User already registered')
+        ? 'Email ini sudah terdaftar.'
+        : 'Pendaftaran gagal. Mohon coba lagi.';
+      addToast(errorMessage, ToastType.ERROR);
       setLoading(false);
     }
   };

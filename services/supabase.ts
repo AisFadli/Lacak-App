@@ -19,9 +19,14 @@ const initializeSupabase = (): SupabaseClient => {
             `Supabase credentials are not configured. Please create a .env file and add your credentials.
     App will run with mock data.`
         );
-        // Return a dummy client. API functions check `useMock` and won't call methods on it,
-        // except for subscription functions which are handled below.
-        return {} as SupabaseClient;
+        // Return a dummy client with the minimal mocks needed to prevent crashes.
+        return {
+            auth: {
+                onAuthStateChange: () => ({
+                    data: { subscription: { unsubscribe: () => {} } },
+                }),
+            },
+        } as unknown as SupabaseClient;
     }
     return createClient(supabaseUrl, supabaseAnonKey);
 };
@@ -46,12 +51,12 @@ the SQL Editor for this.
    - created_at: timestamptz (default: now())
 
 2. `customers` table:
-   - id: uuid (primary key, default: uuid_generate_v4())
+   - id: uuid (primary key, linked to auth.users.id)
    - name: text
    - email: text (should be unique)
    - phone: text
    - address: text
-   - password: text (NOT NULL)
+   - password: text (DEPRECATED - now nullable, for legacy users only)
    - created_at: timestamptz (default: now())
 
 3. `drivers` table:
@@ -82,14 +87,15 @@ ENABLE REALTIME:
 
 ROW LEVEL SECURITY (RLS):
 - For security, it's recommended to enable RLS on all tables.
-- If RLS is enabled on the `customers` table, new users won't be able to register.
-- **TO FIX REGISTRATION**, you MUST create a policy to allow public inserts.
+- For new user registration via Supabase Auth to work with a profile table,
+  you MUST create a policy that allows authenticated users to insert their own profile.
 - Run the following command in the Supabase SQL Editor:
 
-  CREATE POLICY "Allow public insert for new customers"
+  CREATE POLICY "Allow authenticated users to insert their own profile"
   ON public.customers
   FOR INSERT
-  WITH CHECK (true);
+  TO authenticated
+  WITH CHECK (auth.uid() = id);
 
 ================================================================================
 */
@@ -119,111 +125,123 @@ const MOCK_DELIVERIES: Delivery[] = [
 // --- API Functions ---
 
 // Auth
+export const logoutUser = async () => {
+    if (useMock) return;
+    await supabase.auth.signOut();
+};
+
+export const registerAndLoginCustomer = async (customerData: Omit<Customer, 'id' | 'created_at'> & { password: string }): Promise<User> => {
+    if (useMock) {
+        const newCustomer: Customer = { ...customerData, id: `c${Date.now()}`, created_at: new Date().toISOString() };
+        MOCK_CUSTOMERS.push(newCustomer);
+        const user: User = { id: newCustomer.id, name: newCustomer.name, email: newCustomer.email, role: UserRole.CUSTOMER };
+        return user;
+    }
+    
+    const { email, password, name, phone, address } = customerData;
+    
+    // 1. Sign up the user in Supabase Auth
+    const { data: authData, error: authError } = await supabase.auth.signUp({ email, password });
+
+    if (authError || !authData.user) {
+        console.error('Supabase Auth signup failed:', authError);
+        throw authError || new Error("Could not create user.");
+    }
+
+    // 2. Insert the user profile into the 'customers' table
+    const { error: profileError } = await supabase.from('customers').insert({
+        id: authData.user.id, // Use the ID from Auth user
+        name,
+        email,
+        phone,
+        address,
+    });
+
+    if (profileError) {
+        console.error('Failed to create customer profile:', profileError);
+        // In a production app, you should delete the orphaned auth user here.
+        // This requires admin privileges (service_role key) and is best done in a serverless function.
+        throw profileError;
+    }
+
+    // 3. Return the user object for immediate login
+    return {
+        id: authData.user.id,
+        name: name,
+        role: UserRole.CUSTOMER,
+        email: email,
+    };
+};
+
+
 export const loginUser = async (email: string, password: string): Promise<User | null> => {
     if (useMock) {
         const mockAdmin = MOCK_ADMINS.find(u => u.email === email);
-        if (mockAdmin) {
-            return { id: mockAdmin.id, name: mockAdmin.name, role: UserRole.ADMIN, email: mockAdmin.email };
-        }
+        if (mockAdmin) return { id: mockAdmin.id, name: mockAdmin.name, role: UserRole.ADMIN, email: mockAdmin.email };
         const mockDriver = MOCK_DRIVERS.find(u => u.email === email);
-        if (mockDriver) {
-             return { id: mockDriver.id, name: mockDriver.name, role: UserRole.DRIVER, email: mockDriver.email };
-        }
+        if (mockDriver) return { id: mockDriver.id, name: mockDriver.name, role: UserRole.DRIVER, email: mockDriver.email };
         const mockCustomer = MOCK_CUSTOMERS.find(u => u.email === email);
-        if (mockCustomer) {
-            return { id: mockCustomer.id, name: mockCustomer.name, role: UserRole.CUSTOMER, email: mockCustomer.email };
-        }
+        if (mockCustomer) return { id: mockCustomer.id, name: mockCustomer.name, role: UserRole.CUSTOMER, email: mockCustomer.email };
         return null;
     }
     
+    // 1. Try to sign in with Supabase Auth (for new, secure customers)
+    const { data: authData, error: authError } = await supabase.auth.signInWithPassword({ email, password });
+    if (!authError && authData.user) {
+        const { data: customerProfile } = await supabase.from('customers').select('id, name, email').eq('id', authData.user.id).single();
+        if (customerProfile) {
+            return { id: customerProfile.id, name: customerProfile.name, role: UserRole.CUSTOMER, email: customerProfile.email };
+        }
+    }
+
+    // 2. Fallback to old insecure login for Admins, Drivers, and legacy customers
     // Check admins table
-    let { data: adminData, error: adminError } = await supabase
-        .from('admins')
-        .select('*')
-        .eq('email', email)
-        .eq('password', password)
-        .maybeSingle(); // FIX: Use maybeSingle to avoid 406 error on no result
-        
-    if (adminError) console.error("Admin login check failed:", adminError);
-    if (adminData) {
-        return {
-            id: adminData.id,
-            name: adminData.name,
-            role: UserRole.ADMIN,
-            email: adminData.email,
-        };
-    }
+    let { data: adminData, error: adminError } = await supabase.from('admins').select('*').eq('email', email).eq('password', password).maybeSingle();
+    if (adminError && authError) console.debug("Admin login check failed:", adminError.message);
+    if (adminData) return { id: adminData.id, name: adminData.name, role: UserRole.ADMIN, email: adminData.email };
 
-    // Check customers table
-    let { data: customerData, error: customerError } = await supabase
-        .from('customers')
-        .select('*')
-        .eq('email', email)
-        .eq('password', password)
-        .maybeSingle(); // FIX: Use maybeSingle
-
-    if (customerError) console.error("Customer login check failed:", customerError);
-    if (customerData) {
-        return {
-            id: customerData.id,
-            name: customerData.name,
-            role: UserRole.CUSTOMER,
-            email: customerData.email,
-        };
-    }
+    // Check customers table (legacy)
+    let { data: customerData, error: customerError } = await supabase.from('customers').select('*').eq('email', email).eq('password', password).maybeSingle();
+    if (customerError && authError) console.debug("Customer login check failed:", customerError.message);
+    if (customerData) return { id: customerData.id, name: customerData.name, role: UserRole.CUSTOMER, email: customerData.email };
 
     // Check drivers table
-    let { data: driverData, error: driverError } = await supabase
-        .from('drivers')
-        .select('*')
-        .eq('email', email)
-        .eq('password', password)
-        .maybeSingle(); // FIX: Use maybeSingle
-    
-    if (driverError) console.error("Driver login check failed:", driverError);
-    if (driverData) {
-        return {
-            id: driverData.id,
-            name: driverData.name,
-            role: UserRole.DRIVER,
-            email: driverData.email,
-        };
-    }
+    let { data: driverData, error: driverError } = await supabase.from('drivers').select('*').eq('email', email).eq('password', password).maybeSingle();
+    if (driverError && authError) console.debug("Driver login check failed:", driverError.message);
+    if (driverData) return { id: driverData.id, name: driverData.name, role: UserRole.DRIVER, email: driverData.email };
 
-    // If no user is found in any table
+    // If no user is found
     console.log(`Login attempt failed for email: ${email}`);
     return null; 
 }
 
-/**
- * Simulates sending a password reset email by checking if the email exists.
- * In a real application, integrate an email service to send a secure, token-based reset link.
- * @param email The user's email address.
- * @returns A promise that resolves to true if the user exists, false otherwise.
- */
-export const requestPasswordReset = async (email: string): Promise<boolean> => {
+export const requestPasswordReset = async (email: string): Promise<void> => {
     if (useMock) {
-        const allUsers = [...MOCK_ADMINS, ...MOCK_CUSTOMERS, ...MOCK_DRIVERS];
-        return allUsers.some(u => u.email === email);
+        console.log(`Mock password reset request for ${email}`);
+        return;
     }
+    // This now uses Supabase Auth. It will only work for users who are in the `auth.users` table
+    // (i.e., customers who signed up with the new, secure registration form).
+    // Supabase handles not revealing whether an email exists for security.
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        // redirectTo: 'optional-url-if-not-your-site-url'
+    });
+    if (error) {
+        // We log the error for debugging but don't throw it, to avoid revealing user existence.
+        console.error('Error requesting password reset:', error.message);
+    }
+};
 
-    // Check if the email exists in any of the user tables.
-    const { data: adminData, error: adminError } = await supabase.from('admins').select('id').eq('email', email).maybeSingle();
-    if (adminData) return true;
-
-    const { data: customerData, error: customerError } = await supabase.from('customers').select('id').eq('email', email).maybeSingle();
-    if (customerData) return true;
-
-    const { data: driverData, error: driverError } = await supabase.from('drivers').select('id').eq('email', email).maybeSingle();
-    if (driverData) return true;
-
-    // Log errors for debugging, but don't throw, as one will always fail if the user is in another table.
-    if (adminError) console.debug('Admin check for password reset failed:', adminError.message);
-    if (customerError) console.debug('Customer check for password reset failed:', customerError.message);
-    if (driverError) console.debug('Driver check for password reset failed:', driverError.message);
-
-    // Return false if email is not found in any table.
-    return false;
+export const updatePassword = async (newPassword: string): Promise<void> => {
+    if (useMock) {
+        console.log('Mock password updated.');
+        return;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) {
+        console.error('Failed to update password:', error);
+        throw error;
+    }
 };
 
 
@@ -435,6 +453,12 @@ export const getAllCustomers = async (): Promise<Customer[]> => {
 
 type CustomerData = Omit<Customer, 'id' | 'created_at'> & { password?: string };
 
+/**
+ * Creates a customer profile. NOTE: This is used by the Admin panel.
+ * Customers created this way WILL NOT have a Supabase Auth account
+ * and will use the insecure password-in-table login method.
+ * The "Forgot Password" feature will not work for them.
+ */
 export const createCustomer = async (customerData: CustomerData): Promise<Customer> => {
     if (useMock) {
         const newCustomer: Customer = { ...customerData, id: `c${Date.now()}`, created_at: new Date().toISOString() };
@@ -467,6 +491,8 @@ export const deleteCustomer = async (id: string) => {
         if (index > -1) MOCK_CUSTOMERS.splice(index, 1);
         return;
     }
+    // In production, you should also delete the corresponding Supabase Auth user.
+    // This requires admin privileges and is best done in a serverless function.
     const { error } = await supabase.from('customers').delete().eq('id', id);
     if (error) throw error;
 };
