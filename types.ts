@@ -35,6 +35,8 @@ export interface Driver extends BaseUser {
 
 export interface Customer extends BaseUser {}
 
+export interface Admin extends BaseUser {}
+
 
 export interface Delivery {
   id: string;

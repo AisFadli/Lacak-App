@@ -15,6 +15,8 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackToLogin }
     email: '',
     phone: '',
     address: '',
+    password: '',
+    confirmPassword: '',
   });
   const [loading, setLoading] = useState(false);
   const { addToast } = useToast();
@@ -26,9 +28,14 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackToLogin }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (formData.password !== formData.confirmPassword) {
+      addToast('Kata sandi tidak cocok.', ToastType.ERROR);
+      return;
+    }
     setLoading(true);
     try {
-      const newCustomer = await createCustomer(formData);
+      const { confirmPassword, ...customerData } = formData;
+      const newCustomer = await createCustomer(customerData);
       addToast('Pendaftaran berhasil! Selamat datang.', ToastType.SUCCESS);
       onRegister({
         id: newCustomer.id,
@@ -50,7 +57,7 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackToLogin }
             <h2 className="text-3xl font-extrabold text-gray-900 dark:text-white">Daftar Akun Pelanggan</h2>
             <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
                 Sudah punya akun?{' '}
-                <button onClick={onBackToLogin} className="font-medium text-blue-600 hover:text-blue-500">
+                <button onClick={onBackToLogin} className="font-medium text-blue-600 hover:text-blue-500 dark:text-blue-400 dark:hover:text-blue-300">
                     Masuk di sini
                 </button>
             </p>
@@ -71,6 +78,14 @@ const RegisterPage: React.FC<RegisterPageProps> = ({ onRegister, onBackToLogin }
           <div>
             <label htmlFor="address" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Alamat</label>
             <input type="text" name="address" id="address" value={formData.address} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+          </div>
+          <div>
+            <label htmlFor="password" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Kata Sandi</label>
+            <input type="password" name="password" id="password" value={formData.password} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
+          </div>
+           <div>
+            <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 dark:text-gray-300">Konfirmasi Kata Sandi</label>
+            <input type="password" name="confirmPassword" id="confirmPassword" value={formData.confirmPassword} onChange={handleChange} required className="mt-1 block w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm" />
           </div>
           <div>
             <button
