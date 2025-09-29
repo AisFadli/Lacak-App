@@ -1,9 +1,9 @@
 import React, { useRef, useEffect, useState } from 'react';
 import mapboxgl, { Map, Marker, LngLatLike } from 'mapbox-gl';
+import { mapboxToken } from '../services/supabase';
 
-// IMPORTANT: Mapbox token is now read from .env file.
-// FIX: Cast `import.meta` to `any` to access Vite environment variables without TypeScript errors as type definitions are missing.
-mapboxgl.accessToken = (import.meta as any).env?.VITE_MAPBOX_TOKEN || 'YOUR_MAPBOX_TOKEN_HERE';
+// FIX: Set the access token from the imported single source of truth.
+mapboxgl.accessToken = mapboxToken;
 
 interface MapMarker {
   id: string;
@@ -32,7 +32,8 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ markers, routeGeoJson, initialV
   useEffect(() => {
     if (map.current || !mapContainer.current) return;
     
-    if (mapboxgl.accessToken.includes('YOUR_MAPBOX_TOKEN_HERE')) {
+    // FIX: Check for a falsy token, which is now an empty string if not configured.
+    if (!mapboxgl.accessToken) {
         console.warn("Mapbox token not set. Map will not render. Update it in your .env file.");
         return;
     }
@@ -144,7 +145,8 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ markers, routeGeoJson, initialV
   }, [routeGeoJson]);
 
 
-  if (mapboxgl.accessToken.includes('YOUR_MAPBOX_TOKEN_HERE')) {
+  // FIX: Update this conditional render to check for a falsy (empty string) token.
+  if (!mapboxgl.accessToken) {
     return (
         <div className="h-full w-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center rounded-lg">
             <p className="text-gray-600 dark:text-gray-300">Mapbox token is not configured.</p>

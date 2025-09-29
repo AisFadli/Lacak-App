@@ -6,7 +6,9 @@ import { Delivery, Driver, DeliveryStatus, Customer, User, UserRole, Admin } fro
 // FIX: Cast `import.meta` to `any` to access Vite environment variables without TypeScript errors as type definitions are missing.
 const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
-const mapboxToken = (import.meta as any).env?.VITE_MAPBOX_TOKEN || '';
+// FIX: Export mapboxToken to create a single source of truth for the app.
+// Fallback to an empty string ensures consistent checks across the application.
+export const mapboxToken = (import.meta as any).env?.VITE_MAPBOX_TOKEN || '';
 
 
 const useMock = !supabaseUrl || !supabaseAnonKey || supabaseUrl.includes('YOUR_SUPABASE_URL');
@@ -192,6 +194,37 @@ export const loginUser = async (email: string, password: string): Promise<User |
     console.log(`Login attempt failed for email: ${email}`);
     return null; 
 }
+
+/**
+ * Simulates sending a password reset email by checking if the email exists.
+ * In a real application, integrate an email service to send a secure, token-based reset link.
+ * @param email The user's email address.
+ * @returns A promise that resolves to true if the user exists, false otherwise.
+ */
+export const requestPasswordReset = async (email: string): Promise<boolean> => {
+    if (useMock) {
+        const allUsers = [...MOCK_ADMINS, ...MOCK_CUSTOMERS, ...MOCK_DRIVERS];
+        return allUsers.some(u => u.email === email);
+    }
+
+    // Check if the email exists in any of the user tables.
+    const { data: adminData, error: adminError } = await supabase.from('admins').select('id').eq('email', email).maybeSingle();
+    if (adminData) return true;
+
+    const { data: customerData, error: customerError } = await supabase.from('customers').select('id').eq('email', email).maybeSingle();
+    if (customerData) return true;
+
+    const { data: driverData, error: driverError } = await supabase.from('drivers').select('id').eq('email', email).maybeSingle();
+    if (driverData) return true;
+
+    // Log errors for debugging, but don't throw, as one will always fail if the user is in another table.
+    if (adminError) console.debug('Admin check for password reset failed:', adminError.message);
+    if (customerError) console.debug('Customer check for password reset failed:', customerError.message);
+    if (driverError) console.debug('Driver check for password reset failed:', driverError.message);
+
+    // Return false if email is not found in any table.
+    return false;
+};
 
 
 // Deliveries
@@ -530,7 +563,7 @@ export const subscribeToDriverLocation = (driverId: string, callback: (payload: 
  * @returns A promise that resolves to [lng, lat] coordinates.
  */
 export const geocodeAddress = async (address: string): Promise<[number, number]> => {
-    if (!mapboxToken || mapboxToken.includes('YOUR_MAPBOX_TOKEN_HERE')) {
+    if (!mapboxToken) {
         console.error("Mapbox token is not configured.");
         throw new Error("Mapbox token is not configured.");
     }
@@ -563,6 +596,10 @@ export const getDirections = async (
     pickupCoords: [number, number],
     destinationCoords: [number, number]
 ) => {
+    if (!mapboxToken) {
+        console.error("Mapbox token is not configured.");
+        throw new Error("Mapbox token is not configured.");
+    }
     const coordinates = `${startCoords.join(',')};${pickupCoords.join(',')};${destinationCoords.join(',')}`;
     const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?geometries=geojson&access_token=${mapboxToken}`;
 
