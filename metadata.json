@@ -1,5 +1,7 @@
 {
   "name": "Lacak Kiriman - Delivery Tracker",
   "description": "A responsive web application for tracking the history and real-time location of goods or passenger deliveries, with distinct views for customers, admins, and drivers. This application integrates with Supabase for data storage and Mapbox for live location visualization.",
-  "requestFramePermissions": []
+  "requestFramePermissions": [
+    "geolocation"
+  ]
 }

@@ -15,6 +15,7 @@ interface MapMarker {
 
 interface MapWrapperProps {
   markers: MapMarker[];
+  routeGeoJson?: any | null; // GeoJSON Feature for the route line
   initialViewState?: {
     longitude: number;
     latitude: number;
@@ -23,7 +24,7 @@ interface MapWrapperProps {
   style?: React.CSSProperties;
 }
 
-const MapWrapper: React.FC<MapWrapperProps> = ({ markers, initialViewState, style }) => {
+const MapWrapper: React.FC<MapWrapperProps> = ({ markers, routeGeoJson, initialViewState, style }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<Map | null>(null);
   const [mapMarkers, setMapMarkers] = useState<Marker[]>([]);
@@ -42,7 +43,30 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ markers, initialViewState, styl
       center: [initialViewState?.longitude || 106.8456, initialViewState?.latitude || -6.2088],
       zoom: initialViewState?.zoom || 11,
     });
-  }, [initialViewState]);
+    
+    map.current.on('load', () => {
+        if (map.current && routeGeoJson) {
+            map.current.addSource('route', {
+                'type': 'geojson',
+                'data': routeGeoJson
+            });
+            map.current.addLayer({
+                'id': 'route',
+                'type': 'line',
+                'source': 'route',
+                'layout': {
+                    'line-join': 'round',
+                    'line-cap': 'round'
+                },
+                'paint': {
+                    'line-color': '#3B82F6',
+                    'line-width': 6
+                }
+            });
+        }
+    });
+
+  }, [initialViewState, routeGeoJson]);
 
   useEffect(() => {
     if (!map.current) return;
@@ -77,8 +101,14 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ markers, initialViewState, styl
 
     setMapMarkers(newMarkers);
     
-    // Auto-fit map to markers if there's more than one
-    if (markers.length > 1) {
+    // Auto-fit map to route or markers
+    if (routeGeoJson && routeGeoJson.geometry.coordinates.length > 0) {
+        const bounds = new mapboxgl.LngLatBounds();
+        routeGeoJson.geometry.coordinates.forEach((coord: LngLatLike) => {
+            bounds.extend(coord);
+        });
+        map.current.fitBounds(bounds, { padding: 60 });
+    } else if (markers.length > 1) {
         const bounds = new mapboxgl.LngLatBounds();
         markers.forEach(marker => {
             bounds.extend([marker.lng, marker.lat]);
@@ -93,7 +123,26 @@ const MapWrapper: React.FC<MapWrapperProps> = ({ markers, initialViewState, styl
 
   // We only want to re-run this effect when the markers data changes.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [markers]);
+  }, [markers, routeGeoJson]);
+  
+   useEffect(() => {
+    if (map.current?.getSource('route') && routeGeoJson) {
+      (map.current.getSource('route') as mapboxgl.GeoJSONSource).setData(routeGeoJson);
+    } else if (map.current?.isStyleLoaded() && !map.current.getSource('route') && routeGeoJson) {
+         map.current.addSource('route', {
+            'type': 'geojson',
+            'data': routeGeoJson
+         });
+         map.current.addLayer({
+            'id': 'route',
+            'type': 'line',
+            'source': 'route',
+            'layout': { 'line-join': 'round', 'line-cap': 'round' },
+            'paint': { 'line-color': '#3B82F6', 'line-width': 6 }
+         });
+    }
+  }, [routeGeoJson]);
+
 
   if (mapboxgl.accessToken.includes('YOUR_MAPBOX_TOKEN_HERE')) {
     return (

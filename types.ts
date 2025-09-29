@@ -50,4 +50,7 @@ export interface Delivery {
   // For joining with tables
   driver?: Driver | null;
   customer?: Customer | null;
+  // For storing final location
+  final_lat?: number | null;
+  final_lng?: number | null;
 }

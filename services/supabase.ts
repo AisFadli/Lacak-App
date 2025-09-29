@@ -6,6 +6,8 @@ import { Delivery, Driver, DeliveryStatus, Customer, User, UserRole, Admin } fro
 // FIX: Cast `import.meta` to `any` to access Vite environment variables without TypeScript errors as type definitions are missing.
 const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
 const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+const mapboxToken = (import.meta as any).env?.VITE_MAPBOX_TOKEN || '';
+
 
 const useMock = !supabaseUrl || !supabaseAnonKey || supabaseUrl.includes('YOUR_SUPABASE_URL');
 
@@ -70,6 +72,8 @@ the SQL Editor for this.
    - created_at: timestamptz (default: now())
    - driver_id: uuid (foreign key to drivers.id)
    - customer_id: uuid (foreign key to customers.id)
+   - final_lat: real (nullable)
+   - final_lng: real (nullable)
 
 ENABLE REALTIME:
 - Go to Database > Replication and enable Realtime for `drivers` and `deliveries` tables.
@@ -243,17 +247,29 @@ export const getDeliveryForCustomer = async (customerId: string): Promise<Delive
     return data as Delivery | null;
 }
 
-export const updateDeliveryStatus = async (deliveryId: string, status: DeliveryStatus) => {
+export const updateDeliveryStatus = async (deliveryId: string, status: DeliveryStatus, finalCoords?: { lat: number; lng: number }) => {
      if (useMock) {
         console.log(`Mock update status for ${deliveryId}: ${status}`);
         const delivery = MOCK_DELIVERIES.find(d => d.id === deliveryId);
-        if(delivery) delivery.status = status;
+        if(delivery) {
+            delivery.status = status;
+            if (finalCoords) {
+                delivery.final_lat = finalCoords.lat;
+                delivery.final_lng = finalCoords.lng;
+            }
+        }
         return;
+    }
+
+    const updateData: { status: DeliveryStatus; final_lat?: number; final_lng?: number } = { status };
+    if (finalCoords) {
+        updateData.final_lat = finalCoords.lat;
+        updateData.final_lng = finalCoords.lng;
     }
 
     const { error } = await supabase
         .from('deliveries')
-        .update({ status: status })
+        .update(updateData)
         .eq('id', deliveryId);
     
     if (error) {
@@ -504,3 +520,66 @@ export const subscribeToDriverLocation = (driverId: string, callback: (payload: 
         .subscribe();
     return channel;
 }
+
+
+// --- Mapbox API Helpers ---
+
+/**
+ * Geocodes an address string to coordinates.
+ * @param address The address to geocode.
+ * @returns A promise that resolves to [lng, lat] coordinates.
+ */
+export const geocodeAddress = async (address: string): Promise<[number, number]> => {
+    if (!mapboxToken || mapboxToken.includes('YOUR_MAPBOX_TOKEN_HERE')) {
+        console.error("Mapbox token is not configured.");
+        throw new Error("Mapbox token is not configured.");
+    }
+    const url = `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(
+        address
+    )}.json?access_token=${mapboxToken}&limit=1`;
+    
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.features && data.features.length > 0) {
+            return data.features[0].center;
+        }
+        throw new Error("Address not found.");
+    } catch (error) {
+        console.error("Geocoding failed:", error);
+        throw error;
+    }
+};
+
+/**
+ * Fetches driving directions from Mapbox Directions API.
+ * @param startCoords [lng, lat] for the start point (driver's location).
+ * @param pickupCoords [lng, lat] for the pickup point (origin).
+ * @param destinationCoords [lng, lat] for the destination.
+ * @returns A promise that resolves to a GeoJSON Feature object for the route.
+ */
+export const getDirections = async (
+    startCoords: [number, number],
+    pickupCoords: [number, number],
+    destinationCoords: [number, number]
+) => {
+    const coordinates = `${startCoords.join(',')};${pickupCoords.join(',')};${destinationCoords.join(',')}`;
+    const url = `https://api.mapbox.com/directions/v5/mapbox/driving/${coordinates}?geometries=geojson&access_token=${mapboxToken}`;
+
+    try {
+        const response = await fetch(url);
+        const data = await response.json();
+        if (data.routes && data.routes.length > 0) {
+            const route = data.routes[0].geometry;
+            return {
+                type: 'Feature',
+                properties: {},
+                geometry: route,
+            };
+        }
+        throw new Error("Could not find a route.");
+    } catch (error) {
+        console.error("Fetching directions failed:", error);
+        throw error;
+    }
+};
