@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Delivery, Driver } from '../types';
-import { getDeliveryForCustomer, subscribeToDriverLocation } from '../services/supabase';
+import { getDeliveryForCustomer, subscribeToDriverLocation, subscribeToCustomerDelivery } from '../services/supabase';
 import MapWrapper from '../components/MapWrapper';
 import { useToast } from '../contexts/ToastContext';
 import { ToastType } from '../components/Toast';
@@ -15,29 +15,42 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ customerId }) => 
   const [loading, setLoading] = useState(true);
   const { addToast } = useToast();
 
-  useEffect(() => {
-    const fetchDelivery = async () => {
-      if (!customerId) return;
-      setLoading(true);
-      try {
-        const data = await getDeliveryForCustomer(customerId);
-        setDelivery(data);
-        if (data?.driver) {
-          setDriver(data.driver);
-        }
-      } catch (error) {
-        console.error(error);
-        addToast('Gagal memuat detail pengiriman.', ToastType.ERROR);
-      } finally {
-        setLoading(false);
+  const fetchDelivery = useCallback(async () => {
+    if (!customerId) return;
+    setLoading(true);
+    try {
+      const data = await getDeliveryForCustomer(customerId);
+      setDelivery(data);
+      if (data?.driver) {
+        setDriver(data.driver);
+      } else {
+        setDriver(null);
       }
-    };
-
-    fetchDelivery();
+    } catch (error) {
+      console.error(error);
+      addToast('Gagal memuat detail pengiriman.', ToastType.ERROR);
+    } finally {
+      setLoading(false);
+    }
   }, [customerId, addToast]);
 
   useEffect(() => {
-    if (!driver?.id) return;
+    fetchDelivery();
+
+    const deliverySubscription = subscribeToCustomerDelivery(customerId, (payload) => {
+        addToast('Status pengiriman diperbarui.', ToastType.INFO);
+        fetchDelivery();
+    });
+
+    return () => {
+      deliverySubscription.unsubscribe();
+    };
+  }, [customerId, fetchDelivery, addToast]);
+
+  useEffect(() => {
+    if (!driver?.id || delivery?.status !== 'IN_PROGRESS') {
+      return; // No subscription needed if no driver or delivery is not active
+    }
 
     const subscription = subscribeToDriverLocation(driver.id, (payload) => {
       const updatedDriver = payload.new as Driver;
@@ -47,23 +60,44 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ customerId }) => 
     return () => {
       subscription.unsubscribe();
     };
-  }, [driver?.id]);
+  }, [driver?.id, delivery?.status]);
 
-  if (loading) {
+  if (loading && !delivery) {
     return <p className="text-center">Memuat detail pengiriman Anda...</p>;
   }
 
   if (!delivery) {
-    return <p className="text-center">Tidak dapat menemukan data pengiriman untuk Anda.</p>;
+    return (
+        <div className="text-center bg-white dark:bg-gray-800 p-8 rounded-xl shadow-lg">
+            <h3 className="text-xl font-bold mb-2 text-gray-900 dark:text-white">Tidak Ada Pengiriman Aktif</h3>
+            <p className="text-gray-600 dark:text-gray-400">Tidak dapat menemukan data pengiriman untuk Anda. Jika Anda baru saja memesan, silakan tunggu sebentar.</p>
+        </div>
+    );
+  }
+  
+  const isTrackingActive = delivery.status === 'IN_PROGRESS' && driver?.current_lat && driver?.current_lng;
+  const mapMarkers = [];
+
+  if (isTrackingActive) {
+    mapMarkers.push({
+      id: driver!.id,
+      lng: driver!.current_lng!,
+      lat: driver!.current_lat!,
+      color: '#10B981',
+      popupContent: `<strong class="text-sm">${driver!.name}</strong><br>Driver Anda`
+    });
+  }
+  
+  if (delivery.status === 'DELIVERED' && delivery.final_lat && delivery.final_lng) {
+      mapMarkers.push({
+          id: 'destination-delivered',
+          lng: delivery.final_lng,
+          lat: delivery.final_lat,
+          color: '#3B82F6',
+          popupContent: `<strong class="text-sm">Tujuan Akhir</strong><br>Paket telah sampai`
+      });
   }
 
-  const mapMarkers = driver && driver.current_lat && driver.current_lng ? [{
-    id: driver.id,
-    lng: driver.current_lng,
-    lat: driver.current_lat,
-    color: '#10B981',
-    popupContent: `<strong class="text-sm">${driver.name}</strong><br>Driver Anda`
-  }] : [];
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -86,6 +120,11 @@ const CustomerDashboard: React.FC<CustomerDashboardProps> = ({ customerId }) => 
             <p className="text-sm text-gray-500 dark:text-gray-400">Tujuan</p>
             <p className="font-medium text-gray-800 dark:text-gray-200">{delivery.destination_address}</p>
           </div>
+           {delivery.status === 'DELIVERED' && (
+             <div className="pt-3 mt-2 border-t border-gray-200 dark:border-gray-700">
+                <p className="text-sm text-green-600 dark:text-green-400 font-semibold">Paket telah berhasil diantar!</p>
+            </div>
+          )}
         </div>
       </div>
       <div className="lg:col-span-2 h-96 lg:h-auto min-h-[500px] w-full bg-gray-200 dark:bg-gray-800 rounded-xl shadow-lg">

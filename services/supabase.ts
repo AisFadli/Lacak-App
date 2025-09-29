@@ -554,6 +554,24 @@ export const subscribeToDriverLocation = (driverId: string, callback: (payload: 
     return channel;
 }
 
+export const subscribeToCustomerDelivery = (customerId: string, callback: (payload: any) => void): RealtimeChannel => {
+    if (useMock) {
+        // Return a dummy channel for mock mode.
+        return {
+            unsubscribe: () => {},
+        } as unknown as RealtimeChannel;
+    }
+    const channel = supabase
+        .channel(`customer-${customerId}-delivery`)
+        .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'deliveries', filter: `customer_id=eq.${customerId}` },
+            callback
+        )
+        .subscribe();
+    return channel;
+}
+
 
 // --- Mapbox API Helpers ---
 
